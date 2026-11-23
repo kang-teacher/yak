@@ -144,9 +144,9 @@
           body: JSON.stringify({ question: question, data: summary })
         });
         const result = await res.json();
-        box.textContent = result.answer || ("⚠️ " + result.error);
+        box.textContent = result.answer || ("⚠️ " + (result.error || JSON.stringify(result)));
       } catch (e) {
-        box.textContent = "⚠️ 연결 실패: Vercel 주소(.vercel.app)에서 열었는지 확인하세요.";
+        box.textContent = "⚠️ 연결 실패: Vercel 주소(.vercel.app)에서 열었는지 확인하세요. (" + e.message + ")";
       }
     }
 
