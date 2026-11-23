@@ -2,19 +2,26 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>증상별 일반의약품 대시보드</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body { font-family: sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; background: #f5f8f7; }
     .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-    .row { display: flex; gap: 20px; }
-    .row .card { flex: 1; }
-    #search { width: 100%; padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; }
-    .drug { border-bottom: 1px solid #eee; padding: 12px 0; }
+    .row { display: flex; gap: 20px; flex-wrap: wrap; }
+    .row .card { flex: 1; min-width: 280px; }
+    input { padding: 10px; font-size: 15px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; }
+    #search { width: 100%; }
+    .drug { border-bottom: 1px solid #eee; padding: 12px 0; overflow: hidden; }
     .drug img { width: 120px; float: right; margin-left: 10px; }
     .drug h3 { margin: 0 0 4px; }
     .company { color: #888; font-size: 14px; margin: 0; }
     .notice { font-size: 13px; color: #b45309; }
+    .chat-input { display: flex; gap: 8px; margin-top: 10px; }
+    .chat-input input { flex: 1; }
+    button { padding: 8px 14px; border: 1px solid #ddd; border-radius: 16px; background: #f3f4f6; cursor: pointer; }
+    #quick button { margin: 4px 4px 0 0; }
+    #answer { margin-top: 12px; white-space: pre-wrap; line-height: 1.6; }
   </style>
 </head>
 <body>
@@ -45,18 +52,29 @@
   </div>
 
   <div class="card">
+    <h2>🤖 AI에게 물어보기</h2>
+    <div id="quick"></div>
+    <div class="chat-input">
+      <input id="question" placeholder="데이터에 대해 궁금한 점을 물어보세요">
+      <button id="askBtn">질문</button>
+    </div>
+    <div id="answer"></div>
+  </div>
+
+  <div class="card">
     <h2>📝 나의 분석 한 줄</h2>
     <p>여기에 그래프를 보고 알게 된 점을 써보세요.</p>
   </div>
 
   <script>
+    let summary = {};   // AI에게 보낼 요약 데이터
+
+    // ---------- 1. 데이터 불러와서 그래프 그리기 ----------
     fetch("data.json")
       .then(res => res.json())
       .then(data => {
-        // 증상 이름 채우기
         document.querySelectorAll(".target").forEach(el => el.textContent = data.target);
 
-        // 증상별 약 개수 막대그래프
         new Chart(document.getElementById("symptomChart"), {
           type: "bar",
           data: {
@@ -65,7 +83,6 @@
           }
         });
 
-        // 제약회사 TOP 10 가로 막대그래프
         new Chart(document.getElementById("companyChart"), {
           type: "bar",
           data: {
@@ -75,7 +92,6 @@
           options: { indexAxis: "y" }
         });
 
-        // 졸음 주의 비율 도넛 그래프
         new Chart(document.getElementById("drowsyChart"), {
           type: "doughnut",
           data: {
@@ -84,7 +100,7 @@
           }
         });
 
-        // 약 카드 목록 보여주기
+        // 약 카드 목록
         function showCards(list) {
           const box = document.getElementById("cards");
           box.innerHTML = "";
@@ -92,23 +108,63 @@
             const img = d.image ? `<img src="${d.image}" onerror="this.remove()">` : "";
             box.innerHTML += `
               <div class="drug">
-${img}
+                ${img}
                 <h3>${d.name}</h3>
                 <p class="company">${d.company}</p>
-                <p><b>효능</b>${d.effect}</p>
-                <p><b>사용법</b>${d.use}</p>
+                <p><b>효능</b> ${d.effect}</p>
+                <p><b>사용법</b> ${d.use}</p>
               </div>`;
           });
         }
-        showCards(data.drugs.slice(0, 10));   // 처음엔 10개만
+        showCards(data.drugs.slice(0, 10));
 
-        // 검색창에 글자를 칠 때마다 다시 보여주기
         document.getElementById("search").addEventListener("input", e => {
           const word = e.target.value.trim();
-          const found = data.drugs.filter(d => d.name.includes(word));
-          showCards(found.slice(0, 10));
+          showCards(data.drugs.filter(d => d.name.includes(word)).slice(0, 10));
         });
+
+        // AI에게 보낼 요약 만들기
+        summary = {
+          target: data.target,
+          symptom_count: data.symptom_count,
+          top_companies: data.top_companies,
+          drowsy: data.drowsy,
+          drugs: data.drugs.slice(0, 30).map(d => ({ name: d.name, effect: d.effect.slice(0, 80) }))
+        };
       });
+
+    // ---------- 2. AI 챗봇 ----------
+    async function ask(question) {
+      const box = document.getElementById("answer");
+      box.textContent = "🤖 생각 중...";
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: question, data: summary })
+        });
+        const result = await res.json();
+        box.textContent = result.answer || ("⚠️ " + result.error);
+      } catch (e) {
+        box.textContent = "⚠️ 연결 실패: Vercel 주소(.vercel.app)에서 열었는지 확인하세요.";
+      }
+    }
+
+    ["어떤 증상의 약이 가장 많아?", "졸음 주의 약은 얼마나 돼?", "제약회사 순위를 설명해줘"]
+      .forEach(q => {
+        const b = document.createElement("button");
+        b.textContent = q;
+        b.onclick = () => ask(q);
+        document.getElementById("quick").appendChild(b);
+      });
+
+    document.getElementById("askBtn").onclick = () => {
+      const q = document.getElementById("question").value.trim();
+      if (q) ask(q);
+    };
+    document.getElementById("question").addEventListener("keydown", e => {
+      if (e.key === "Enter") document.getElementById("askBtn").click();
+    });
   </script>
 </body>
 </html>
