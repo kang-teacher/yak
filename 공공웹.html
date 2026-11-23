@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>증상별 일반의약품 대시보드</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; background: #f5f8f7; }
+    .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .row { display: flex; gap: 20px; }
+    .row .card { flex: 1; }
+    #search { width: 100%; padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; }
+    .drug { border-bottom: 1px solid #eee; padding: 12px 0; }
+    .drug img { width: 120px; float: right; margin-left: 10px; }
+    .drug h3 { margin: 0 0 4px; }
+    .company { color: #888; font-size: 14px; margin: 0; }
+    .notice { font-size: 13px; color: #b45309; }
+  </style>
+</head>
+<body>
+  <h1>💊 증상별 일반의약품 대시보드</h1>
+  <p>식품의약품안전처 의약품개요정보(e약은요)를 분석했습니다.</p>
+  <p class="notice">※ 학습용 자료입니다. 약을 복용할 때는 약사·의사와 상담하세요.</p>
+
+  <div class="card">
+    <h2>증상별 일반의약품 수</h2>
+    <canvas id="symptomChart"></canvas>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h2><span class="target"></span> 약 제약회사 TOP 10</h2>
+      <canvas id="companyChart"></canvas>
+    </div>
+    <div class="card">
+      <h2><span class="target"></span> 약 중 졸음 주의</h2>
+      <canvas id="drowsyChart"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>🔍 <span class="target"></span> 약 검색</h2>
+    <input id="search" placeholder="약 이름을 입력하세요">
+    <div id="cards"></div>
+  </div>
+
+  <div class="card">
+    <h2>📝 나의 분석 한 줄</h2>
+    <p>여기에 그래프를 보고 알게 된 점을 써보세요.</p>
+  </div>
+
+  <script>
+    fetch("data.json")
+      .then(res => res.json())
+      .then(data => {
+        // 증상 이름 채우기
+        document.querySelectorAll(".target").forEach(el => el.textContent = data.target);
+
+        // 증상별 약 개수 막대그래프
+        new Chart(document.getElementById("symptomChart"), {
+          type: "bar",
+          data: {
+            labels: Object.keys(data.symptom_count),
+            datasets: [{ label: "약 개수", data: Object.values(data.symptom_count) }]
+          }
+        });
+
+        // 제약회사 TOP 10 가로 막대그래프
+        new Chart(document.getElementById("companyChart"), {
+          type: "bar",
+          data: {
+            labels: data.top_companies.map(c => c[0]),
+            datasets: [{ label: "제품 수", data: data.top_companies.map(c => c[1]) }]
+          },
+          options: { indexAxis: "y" }
+        });
+
+        // 졸음 주의 비율 도넛 그래프
+        new Chart(document.getElementById("drowsyChart"), {
+          type: "doughnut",
+          data: {
+            labels: Object.keys(data.drowsy),
+            datasets: [{ data: Object.values(data.drowsy) }]
+          }
+        });
+
+        // 약 카드 목록 보여주기
+        function showCards(list) {
+          const box = document.getElementById("cards");
+          box.innerHTML = "";
+          list.forEach(d => {
+            const img = d.image ? `<img src="${d.image}" onerror="this.remove()">` : "";
+            box.innerHTML += `
+              <div class="drug">
+${img}
+                <h3>${d.name}</h3>
+                <p class="company">${d.company}</p>
+                <p><b>효능</b>${d.effect}</p>
+                <p><b>사용법</b>${d.use}</p>
+              </div>`;
+          });
+        }
+        showCards(data.drugs.slice(0, 10));   // 처음엔 10개만
+
+        // 검색창에 글자를 칠 때마다 다시 보여주기
+        document.getElementById("search").addEventListener("input", e => {
+          const word = e.target.value.trim();
+          const found = data.drugs.filter(d => d.name.includes(word));
+          showCards(found.slice(0, 10));
+        });
+      });
+  </script>
+</body>
+</html>
