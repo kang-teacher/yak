@@ -11,6 +11,10 @@ module.exports = async (req, res) => {
     return res.status(405).json({ error: "POST 요청만 받아요." });
   }
 
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(500).json({ error: "ANTHROPIC_API_KEY 환경 변수가 없어요. Vercel 설정 후 Redeploy 하세요." });
+  }
+
   const { question, data } = req.body || {};
   if (!question) {
     return res.status(400).json({ error: "질문이 비어 있어요." });
@@ -29,17 +33,34 @@ module.exports = async (req, res) => {
       },
       body: JSON.stringify({
         model: "claude-haiku-5-5",
-        max_tokens: 400,
+        max_tokens: 1000,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: `[데이터]\n${context}\n\n[질문]\n${q}` }],
       }),
     });
 
     const result = await response.json();
+
     if (!response.ok) {
-      return res.status(500).json({ error: result.error?.message || "AI 요청 실패" });
+      return res.status(500).json({
+        error: "AI 요청 실패: " + (result.error?.message || JSON.stringify(result).slice(0, 300)),
+      });
     }
-    return res.status(200).json({ answer: result.content[0].text });
+
+    // 응답에서 글(text) 부분만 모으기
+    const text = (result.content || [])
+      .filter(block => block.type === "text")
+      .map(block => block.text)
+      .join("\n")
+      .trim();
+
+    if (!text) {
+      return res.status(500).json({
+        error: "AI 답변이 비어 있어요: " + JSON.stringify(result).slice(0, 300),
+      });
+    }
+
+    return res.status(200).json({ answer: text });
   } catch (err) {
     return res.status(500).json({ error: "서버 오류: " + err.message });
   }
