@@ -3,21 +3,23 @@ const CLAUDE_URL = "https://api.anthropic.com/v1/messages";
 const DRUG_URL = "http://apis.data.go.kr/1471000/DrbEasyDrugInfoService/getDrbEasyDrugList";
 const MODEL = "claude-haiku-5-5";
 
-// 1단계: 사진 읽기용 지시문
+// 1단계: 사진 읽기용 지시문 (짧게 쓰도록 제한)
 const VISION_PROMPT =
-  "너는 의약품 포장 사진을 읽는 도우미야. 사진에 보이는 글자와 특징만 근거로 " +
-  "아래 JSON 형식으로만 답해. JSON 말고 다른 말은 절대 쓰지 마.\n" +
+  "너는 의약품 사진을 읽는 도우미야. 사진에 보이는 글자와 특징만 근거로 " +
+  "아래 JSON 한 개만 출력해. 코드블록(```)이나 설명 문장은 절대 쓰지 마.\n" +
   '{"is_medicine": true 또는 false, ' +
-  '"product_name": "사진에 보이는 제품명 (없으면 빈 문자열)", ' +
-  '"search_keywords": ["e약은요에서 제품명으로 검색할 짧은 브랜드명 1~2개"], ' +
-  '"visible_text": "사진에서 읽은 주요 글자", ' +
-  '"description": "색, 모양, 포장 형태 등 보이는 특징 1~2문장"}';
+  '"product_name": "포장에 인쇄된 제품명, 없으면 빈 문자열", ' +
+  '"search_keywords": ["제품명 검색용 짧은 브랜드명, 최대 2개, 없으면 빈 배열"], ' +
+  '"visible_text": "읽은 글자, 50자 이내", ' +
+  '"description": "색·모양·형태 특징, 80자 이내 한 문장"}\n' +
+  "알약에 새겨진 숫자나 각인(예: 100 MG)은 제품명이 아니니 product_name에 넣지 마.";
 
 // 3단계: 추측글용 지시문
 const GUESS_PROMPT =
   "너는 고등학생 학습용 의약품 데이터 도우미야. [사진 분석]과 [e약은요 검색 결과]를 비교해서 " +
-  "사진 속 약이 어떤 제품일 가능성이 높은지 3~4문장으로 추측해. " +
-  "'~로 보입니다', '~일 가능성이 있습니다' 같은 추측 표현을 쓰고, 검색 결과가 없으면 없다고 말해. " +
+  "사진 속 약이 어떤 제품일 가능성이 있는지 3~4문장으로 추측해. " +
+  "'~로 보입니다', '~일 가능성이 있습니다' 같은 추측 표현을 쓰고, " +
+  "검색 결과가 없으면 사진만으로는 제품을 특정하기 어렵다고 말하고 보이는 특징만 설명해. " +
   "복용 권유, 복용량, 진단 같은 의학적 조언은 절대 하지 마. " +
   "마지막에 '사진만으로는 정확한 확인이 어려우니 실제 복용 판단은 약사와 상담하세요.'를 붙여.";
 
@@ -46,6 +48,26 @@ async function askClaude(system, content, maxTokens) {
     .map(block => block.text)
     .join("\n")
     .trim();
+}
+
+// AI 답변에서 JSON 꺼내기 (실패해도 멈추지 않음)
+function parseAnalysis(text) {
+  const cleaned = text.replace(/```json|```/g, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start !== -1 && end > start) {
+    try {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    } catch (e) { /* 아래 기본값으로 */ }
+  }
+  // JSON을 못 읽으면 기본값으로 진행
+  return {
+    is_medicine: true,
+    product_name: "",
+    search_keywords: [],
+    visible_text: "",
+    description: cleaned.slice(0, 150),
+  };
 }
 
 // HTML 태그·공백 정리
@@ -113,15 +135,13 @@ module.exports = async (req, res) => {
       VISION_PROMPT,
       [
         { type: "image", source: { type: "base64", media_type: type, data: image } },
-        { type: "text", text: "이 사진을 분석해서 JSON으로만 답해." },
+        { type: "text", text: "이 사진을 분석해서 JSON 한 개만 출력해." },
       ],
-      600
+      1500
     );
-    const match = analysisText.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error("사진 분석 결과를 읽지 못했어요: " + analysisText.slice(0, 100));
-    const analysis = JSON.parse(match[0]);
+    const analysis = parseAnalysis(analysisText);
 
-    if (!analysis.is_medicine) {
+    if (analysis.is_medicine === false) {
       return res.status(200).json({
         analysis,
         drugs: [],
@@ -129,9 +149,9 @@ module.exports = async (req, res) => {
       });
     }
 
-    // ---------- 2단계: e약은요 검색 ----------
+    // ---------- 2단계: e약은요 검색 (제품명이 있을 때만) ----------
     const keywords = [analysis.product_name, ...(analysis.search_keywords || [])]
-      .filter(Boolean)
+      .filter(k => k && String(k).trim())
       .slice(0, 3);
 
     const found = new Map();   // 같은 약 중복 제거
@@ -147,8 +167,10 @@ module.exports = async (req, res) => {
       GUESS_PROMPT,
       "[사진 분석]\n" + JSON.stringify(analysis) +
       "\n\n[e약은요 검색 결과]\n" +
-      JSON.stringify(drugs.map(d => ({ name: d.name, company: d.company, effect: d.effect.slice(0, 150) }))),
-      600
+      (drugs.length
+        ? JSON.stringify(drugs.map(d => ({ name: d.name, company: d.company, effect: d.effect.slice(0, 150) })))
+        : "검색 결과 없음 (사진에서 제품명을 읽지 못함)"),
+      1000
     );
 
     return res.status(200).json({ analysis, drugs, guess });
